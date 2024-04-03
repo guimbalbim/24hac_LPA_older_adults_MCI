@@ -1,0 +1,1321 @@
+---
+title: "The association of the 24hour activity cycle profiles with cognitive function in older adults with Mild Cognitive Impairment: A cross-sectional study"
+author: "Guilherme Moraes Balbim"
+date: "01/26/2024"
+output:
+  pdf_document:
+    latex_engine: xelatex
+    toc: yes
+    number_sections: yes
+    toc_depth: 5
+  word_document:
+    toc: yes
+    toc_depth: '5'
+  editor_options:
+    chunk_output_type: console
+  chunk_output_type: console
+header-includes:
+- \usepackage{caption}
+- \usepackage{pdflscape}
+- \newcommand{\blandscape}{\begin{landscape}}
+- \newcommand{\elandscape}{\end{landscape}}
+geometry: left = 1cm, right = 1cm, top = 1cm, bottom = 1cm
+---
+
+\newpage
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  message = FALSE,
+  fig.height = 7, fig.width = 9, fig.align = "center")
+```
+
+\small
+# Loading packages
+```{r message=FALSE}
+
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(tidyverse,dplyr,tidyr,lubridate,knitr,openxlsx,readxl,tidyLPA,mclust,tableone,tinytex,compositions,mgcv,skimr,GGally,rstatix,broom,psych,performance,janitor,ggplot2, PerformanceAnalytics, emmeans)
+
+```
+
+# Loading data for initial cleaning and descriptives
+```{r message=FALSE}
+
+data_of_interest <- read.xlsx("spreadsheets/all_data_merged_averages_20231114.xlsx")
+
+ids_flags <- read.xlsx("spreadsheets/added_ids_flagged_20231115.xlsx")
+```
+
+# Descriptives
+## Sleep, PA, SB 
+```{r}
+# Create a study variable
+data_of_interest <- data_of_interest %>% 
+  mutate(rct = str_extract(id, "[:alpha:]")) %>% 
+  left_join(., ids_flags, by = "id") %>% 
+  relocate(rct, .after = "id") %>% 
+  relocate(new_id_flag, .after = "id")
+
+# Exclude participants with <5 days of data, < 4h, and > 12h of sleep = 253 participants
+
+data_of_interest <- data_of_interest %>% 
+  filter(total_days >= 5)  %>% 
+  filter(avg_sleep_min > 240 | avg_sleep_min < 720)
+
+skim(data_of_interest)
+
+# Differences by RCT
+kable(print(printToggle = FALSE, CreateTableOne(data = data_of_interest, 
+                                                c("avg_sleep_min",
+                                                  "avg_sedentary_min",
+                                                  "avg_light_pa_min",
+                                                  "avg_mvpa_min"), strata = "rct", 
+                                                  includeNA = TRUE, addOverall = TRUE))) # NS
+
+# Differences between existing and new IDs
+kable(print(printToggle = FALSE, CreateTableOne(data = data_of_interest, 
+                                                c("avg_sleep_min",
+                                                  "avg_sedentary_min",
+                                                  "avg_light_pa_min",
+                                                  "avg_mvpa_min",
+                                                  "adas_cog_plus"), strata = "new_id_flag", 
+                                                  includeNA = TRUE, addOverall = TRUE)))
+
+## Histograms
+data_of_interest %>%
+  dplyr::select("avg_sleep_min","avg_sedentary_min","avg_light_pa_min","avg_mvpa_min","avg_sleep_pct","avg_sedentary_pct","avg_light_pa_pct","avg_mvpa_pct") %>%
+  pivot_longer(cols = 1:8, names_to = "measures", values_to = "data") %>%
+  ggplot(aes(data, fill = measures)) +
+  facet_wrap("measures", scale = "free") +
+  geom_histogram(colour = "black", binwidth = function(x) 2 * IQR(x) / (length(x)^(1/3))) + # Proportional bins
+  theme_minimal() +
+  theme(legend.position = "none")
+
+
+## Bloxplot
+data_of_interest %>%
+  dplyr::select("avg_sleep_min","avg_sedentary_min","avg_light_pa_min","avg_mvpa_min","avg_sleep_pct","avg_sedentary_pct","avg_light_pa_pct","avg_mvpa_pct") %>%
+  pivot_longer(cols = 1:8, names_to = "measures", values_to = "data") %>%
+  ggplot(aes(data, fill = measures)) +
+  geom_boxplot(colour = "black") + # Proportional bins
+  ylim(-2,2) +
+  facet_wrap("measures", scale = "free", ncol = 2) +
+  coord_flip() +
+  theme_minimal() +
+  theme(legend.position = "none") # Some potential outliers
+```
+
+## Demographics
+```{r}
+# Continuous data
+## Differences by RCT
+kable(print(printToggle = FALSE, CreateTableOne(data = data_of_interest, 
+                                                c("age",
+                                                  "moca",
+                                                  "mmse",
+                                                  "height",
+                                                  "weight",
+                                                  "bmi"), strata = "rct", 
+                                                  includeNA = TRUE, addOverall = TRUE)))
+
+## Differences by existing and new IDs
+kable(print(printToggle = FALSE, CreateTableOne(data = data_of_interest, 
+                                                c("age",
+                                                  "moca",
+                                                  "mmse",
+                                                  "height",
+                                                  "weight",
+                                                  "bmi"), strata = "new_id_flag", 
+                                                  includeNA = TRUE, addOverall = TRUE)))
+
+# Categorical data
+## Differences by RCT
+kable(print(printToggle = FALSE, CreateTableOne(data = data_of_interest, 
+                                                c("sex", "education"), strata = "rct", 
+                                                  includeNA = TRUE, addOverall = TRUE)))
+
+## Differences by existing and new IDs
+kable(print(printToggle = FALSE, CreateTableOne(data = data_of_interest, 
+                                                c("sex", "education"), strata = "new_id_flag", 
+                                                  includeNA = TRUE, addOverall = TRUE)))
+
+## Normality tests
+kable(digits = 3, caption = "Normality test", data_of_interest %>% 
+        shapiro_test(avg_sleep_min,
+                     avg_sedentary_min,
+                     avg_light_pa_min,
+                     avg_mvpa_min,
+                     avg_sleep_pct,
+                     avg_sedentary_pct,
+                     avg_light_pa_pct,
+                     avg_mvpa_pct)) # MVPA non-normal
+```
+
+## Outliers
+```{r}
+## Checking outliers
+avg_sleep_min_outliers <- check_outliers(data_of_interest$avg_sleep_min,  method = "iqr")
+avg_sleep_min_outliers # 4 outliers detected: cases 213, 223, 231, 245.
+
+avg_sedentary_min_outliers <- check_outliers(data_of_interest$avg_sedentary_min,  method = "iqr")
+avg_sedentary_min_outliers # 2 outliers detected: cases 40, 97.
+
+avg_light_pa_min_outliers <- check_outliers(data_of_interest$avg_light_pa_min,  method = "iqr")
+avg_light_pa_min_outliers # No outliers detected.
+
+avg_mvpa_min_outliers <- check_outliers(data_of_interest$avg_mvpa_min, method = "iqr")
+avg_mvpa_min_outliers # 11 outliers detected: cases 40, 61, 82, 93, 97, 137, 188, 220, 236, 241, 242.
+
+# Winsorizing outliers
+timeusebehav_wins <- data_of_interest
+
+for(var in c("avg_sleep_min","avg_sedentary_min","avg_light_pa_min","avg_mvpa_min")){
+  Q <- quantile(timeusebehav_wins[[var]], probs=c(.05, .95), na.rm = TRUE)
+  Q1 <- quantile(timeusebehav_wins[[var]], probs=c(.25), na.rm = TRUE)
+  Q3 <- quantile(timeusebehav_wins[[var]], probs=c(.75), na.rm = TRUE)
+  iqr <- IQR(timeusebehav_wins[[var]], na.rm = TRUE)
+  up <-  Q3+1.5*iqr # Upper Range  
+  low <- Q1-1.5*iqr # Lower Range
+  new <- timeusebehav_wins %>% 
+    mutate(wins = ifelse(timeusebehav_wins[[var]] <= (Q1 - 1.5*iqr), Q[1], 
+                         ifelse(timeusebehav_wins[[var]] >= (Q3 + 1.5*iqr), Q[2], timeusebehav_wins[[var]]))) %>% 
+    select(wins) %>% 
+    rename_with(~paste0(var, "_",.))
+  timeusebehav_wins <- cbind(timeusebehav_wins, new)
+}
+
+## Checking distribution with winsorized data
+### Histograms
+timeusebehav_wins %>%
+  select("avg_sleep_min_wins","avg_sedentary_min_wins","avg_light_pa_min_wins","avg_mvpa_min_wins") %>%
+  pivot_longer(cols = 1:4, names_to = "measures", values_to = "data") %>%
+  ggplot(aes(data, fill = measures)) +
+  facet_wrap("measures", scale = "free") +
+  geom_histogram(colour = "black", binwidth = function(x) 2 * IQR(x) / (length(x)^(1/3))) + # Proportional bins
+  theme_minimal() +
+  theme(legend.position = "none")
+
+
+## 24HAC behaviours by study
+kable(print(printToggle = FALSE, CreateTableOne(data = timeusebehav_wins, 
+                                                c("avg_sleep_min_wins",
+                                                  "avg_sedentary_min_wins",
+                                                  "avg_light_pa_min_wins",
+                                                  "avg_mvpa_min_wins"), strata = "rct", 
+                                                  includeNA = TRUE, addOverall = TRUE))) # NS
+
+
+## 24HAC behaviours by existing and new IDs
+kable(print(printToggle = FALSE, CreateTableOne(data = timeusebehav_wins, 
+                                                c("avg_sleep_min_wins",
+                                                  "avg_sedentary_min_wins",
+                                                  "avg_light_pa_min_wins",
+                                                  "avg_mvpa_min_wins"), strata = "new_id_flag", 
+                                                  includeNA = TRUE, addOverall = TRUE)))
+
+data_of_interest <- timeusebehav_wins
+
+```
+
+## ADAS-Cog
+```{r}
+
+kable(print(printToggle = FALSE, CreateTableOne(data = data_of_interest, 
+                                                c("adas_cog_plus"), strata = "rct", 
+                                                  includeNA = TRUE, addOverall = TRUE)))
+
+## Histograms
+data_of_interest %>%
+  select(c("adas_cog_plus")) %>%
+  pivot_longer(cols = 1:1, names_to = "measures", values_to = "data") %>%
+  ggplot(aes(data, fill = measures)) +
+  facet_wrap("measures", scale = "free") +
+  geom_histogram(colour = "black", binwidth = function(x) 2 * IQR(x) / (length(x)^(1/3))) + # Proportional bins
+  theme_minimal() +
+  theme(legend.position = "none")
+
+
+## Bloxplot
+data_of_interest %>%
+  select(c("adas_cog_plus")) %>%
+  pivot_longer(cols = 1, names_to = "measures", values_to = "data") %>%
+  ggplot(aes(data, fill = measures)) +
+  geom_boxplot(colour = "black") + # Proportional bins
+  ylim(-2,2) +
+  facet_wrap("measures", scale = "free", ncol = 2) +
+  coord_flip() +
+  theme_minimal() +
+  theme(legend.position = "none") # Some potential outliers
+
+
+# Checking outliers 
+adas_cog_plus_outliers <- check_outliers(data_of_interest$adas_cog_plus, method = "iqr")
+adas_cog_plus_outliers # 4 outliers detected: cases 92, 118, 139, 224.
+
+# Winsorizing outliers
+data_of_interest_wins <- data_of_interest
+
+for(var in c("adas_cog_plus")){
+  Q <- quantile(data_of_interest_wins[[var]], probs=c(.05, .95), na.rm = TRUE)
+  Q1 <- quantile(data_of_interest_wins[[var]], probs=c(.25), na.rm = TRUE)
+  Q3 <- quantile(data_of_interest_wins[[var]], probs=c(.75), na.rm = TRUE)
+  iqr <- IQR(data_of_interest_wins[[var]], na.rm = TRUE)
+  up <-  Q3+1.5*iqr # Upper Range  
+  low <- Q1-1.5*iqr # Lower Range
+  new <- data_of_interest_wins %>% 
+    mutate(wins = ifelse(data_of_interest_wins[[var]] <= (Q1 - 1.5*iqr), Q[1], 
+                         ifelse(data_of_interest_wins[[var]] >= (Q3 + 1.5*iqr), Q[2], data_of_interest_wins[[var]]))) %>% 
+    select(wins) %>% 
+    rename_with(~paste0(var, "_",.))
+  data_of_interest_wins <- cbind(data_of_interest_wins, new)
+}
+
+## Checking distribution with winsorized data
+### Histograms
+data_of_interest_wins %>%
+  select("adas_cog_plus_wins") %>%
+  pivot_longer(cols = 1:1, names_to = "measures", values_to = "data") %>%
+  ggplot(aes(data, fill = measures)) +
+  facet_wrap("measures", scale = "free") +
+  geom_histogram(colour = "black", binwidth = function(x) 2 * IQR(x) / (length(x)^(1/3))) + # Proportional bins
+  theme_minimal() +
+  theme(legend.position = "none")
+
+## Checking normality of different types of transformations for non-normal
+data_of_interest_wins %>%
+  select(c("adas_cog_plus_wins")) %>%
+  pivot_longer(cols = 1:1, names_to = "measures", values_to = "data") %>%
+  mutate(data_log = log10(data),
+         data_sqrt = sqrt(data)) %>% 
+  group_by(measures) %>% 
+  shapiro_test(data_log,
+               data_sqrt,
+               data) %>% 
+  kable(digits = 3) # ADAS-Cog without transformation looks better
+
+## Checking ADAS-Cog by study
+kable(print(printToggle = FALSE, CreateTableOne(data = data_of_interest_wins, 
+                                                c("adas_cog_plus_wins"), strata = "rct", 
+                                                  includeNA = TRUE, addOverall = TRUE)))
+
+# Saving the dataset 
+# write.csv(data_of_interest_wins, "spreadsheets/all_data_merged_clean_wins_20240117.csv")
+
+```
+
+# Loading data and preparing dataset for compositions
+```{r message=FALSE}
+
+final_data <- read_csv("spreadsheets/all_data_merged_clean_wins_20240117.csv", 
+                       show_col_types = FALSE,
+                       name_repair = make_clean_names,
+                       col_select = -c(13,15,16,20:26,28:48))
+skim(final_data)
+
+```
+
+## Check time-use data adds up 1440
+```{r message=FALSE}
+
+# Raw
+rowSums(final_data[, 
+                  c("avg_mvpa_min", "avg_sedentary_min", "avg_light_pa_min", "avg_sleep_min")
+]) # No, will need the closure from compositions
+final_data <- final_data %>% 
+  mutate(day_duration_wins = rowSums(final_data[,c("avg_mvpa_min_wins", "avg_sedentary_min_wins", "avg_light_pa_min_wins", "avg_sleep_min_wins")]),
+         day_duration = rowSums(final_data[,c("avg_mvpa_min", "avg_sedentary_min", "avg_light_pa_min", "avg_sleep_min")]))
+
+# Winsorized
+rowSums(final_data[, 
+                  c("avg_mvpa_min_wins", "avg_sedentary_min_wins", "avg_light_pa_min_wins", "avg_sleep_min_wins")
+]) # No, will need the closure from compositions
+  
+```
+
+## Closure function (compositions package)
+```{r message=FALSE}
+
+# Winsorized
+## Create dataframes containing the outcome, predictors and covariates
+cols_outcome_wins <- c("adas_cog_plus_wins")
+cols_pred_min_wins <- c("avg_mvpa_min_wins", "avg_sedentary_min_wins", "avg_light_pa_min_wins", "avg_sleep_min_wins")
+cols_id_covars <- c("id","sex","age", "bmi", "moca", "mmse", "education", "rct")
+
+## Combine all dataframes
+cols_pairwise_wins <- c(cols_outcome_wins, cols_pred_min_wins, cols_id_covars)
+
+## Create new dataframe containing all rows from final_data but only cols_pairwise_wins columns
+pairwise_data_wins <- final_data[, cols_pairwise_wins] %>% 
+  relocate(id)
+
+## Ensuring that time-use data have a total of 1440min
+behav_min_wins <- pairwise_data_wins %>% 
+  select("avg_mvpa_min_wins", "avg_sedentary_min_wins", "avg_light_pa_min_wins", "avg_sleep_min_wins")
+
+behav_min_wins_clo <- data.frame(clo(behav_min_wins, total = 1440)) %>% 
+    rename_with(~gsub("wins", "wins_clos", .), contains("wins"))
+
+rowSums(behav_min_wins_clo) # All 1440min
+
+# Raw
+## Create dataframes containing the outcome, predictors and covariates
+cols_outcome <- c("adas_cog_plus")
+cols_pred_min <- c("avg_mvpa_min", "avg_sedentary_min", "avg_light_pa_min", "avg_sleep_min")
+cols_id_covars <- c("id","sex","age", "bmi", "moca", "mmse", "education", "rct")
+
+## Combine all dataframes
+cols_pairwise <- c(cols_outcome, cols_pred_min, cols_id_covars)
+
+## Create new dataframe containing all rows from final_data but only cols_pairwise columns
+pairwise_data <- final_data[, cols_pairwise] %>% 
+  relocate(id)
+
+## Ensuring that time-use data have a total of 1440min
+behav_min <- pairwise_data %>% 
+  select("avg_mvpa_min", "avg_sedentary_min", "avg_light_pa_min", "avg_sleep_min")
+
+behav_min_clo <- data.frame(clo(behav_min, total = 1440)) %>% 
+    rename_with(~gsub("min", "min_clos", .), contains("min"))
+
+rowSums(behav_min_clo) # All 1440min
+
+# Appending 24HAC winsorized and raw closure behaviours to final data
+behav_min_wins_clo_id <- cbind(final_data$id, behav_min_wins_clo) %>% 
+  rename("id" = "final_data$id") %>% 
+  bind_cols(., behav_min_clo)
+
+all_data <- left_join(final_data, behav_min_wins_clo_id, by = "id")
+
+```
+
+## Creating percentage from closure data
+```{r message=FALSE}
+
+all_data <- all_data %>% 
+  mutate(avg_mvpa_pct_clos = (avg_mvpa_min_clos/1440)*100,
+         avg_light_pa_pct_clos = (avg_light_pa_min_clos/1440)*100,
+         avg_sedentary_pct_clos = (avg_sedentary_min_clos/1440)*100,
+         avg_sleep_pct_clos = (avg_sleep_min_clos/1440)*100,
+         avg_mvpa_pct_wins_clos = (avg_mvpa_min_wins_clos/1440)*100,
+         avg_light_pa_pct_wins_clos = (avg_light_pa_min_wins_clos/1440)*100,
+         avg_sedentary_pct_wins_clos = (avg_sedentary_min_wins_clos/1440)*100,
+         avg_sleep_pct_wins_clos = (avg_sleep_min_wins_clos/1440)*100)
+
+```
+
+# Compositional data analysis
+## 3 ilrs for LPA
+Setting up the data to create the ilrs so that the first ilrs ilr1 = MVPA:all remaining, ilr2 = SB:LPA+sleep, ilr3 = LPA:sleep. All three ilrs will be entered in to LPA analysis to capture the entire 24-hour time-use composition.
+```{r,include=TRUE}
+
+## Create a matrix
+data_comp_mean_min <- matrix(c(all_data$avg_mvpa_min_wins_clos, 
+                               all_data$avg_sedentary_min_wins_clos, 
+                               all_data$avg_light_pa_min_wins_clos, 
+                               all_data$avg_sleep_min_wins_clos), ncol = 4)
+
+data_min_clos <- all_data %>% 
+  select("avg_mvpa_min_wins_clos", "avg_sedentary_min_wins_clos", 
+         "avg_light_pa_min_wins_clos", "avg_sleep_min_wins_clos")
+
+rowSums(data_min_clos)
+
+data_comp_mean_pct <- matrix(c(all_data$avg_mvpa_pct_wins_clos,
+                               all_data$avg_sedentary_pct_wins_clos,
+                               all_data$avg_light_pa_pct_wins_clos,
+                               all_data$avg_sleep_pct_wins_clos), ncol = 4)
+
+data_pct_clos <- all_data %>% 
+  select("avg_mvpa_pct_wins_clos", "avg_sedentary_pct_wins_clos", 
+         "avg_light_pa_pct_wins_clos", "avg_sleep_pct_wins_clos")
+
+rowSums(data_pct_clos)
+
+## ILR coordinates - sequential binary partition process
+sbp4_3 = matrix(c( 1, -1, -1,-1, 
+                 0, 1, -1, -1,
+                 0, 0, 1, -1),
+              ncol=4, byrow=TRUE)
+
+
+psi4_3 = gsi.buildilrBase(t(sbp4_3))
+
+## With 3 ilrs. Obs: "avg_mvpa_min_wins_clos", "avg_sedentary_min_wins_clos", "avg_light_pa_min_wins_clos", "avg_sleep_min_wins_clos"
+
+ilrs3 = ilr(acomp(all_data[, c("avg_mvpa_pct_wins_clos", "avg_sedentary_pct_wins_clos", 
+         "avg_light_pa_pct_wins_clos", "avg_sleep_pct_wins_clos")]), V=psi4_3) # compute ilrs of all rows but only columns in cols_pred2 (with closure)
+head(ilrs3)
+
+# rename ilrs to ilr1, ilr2 and ilr3
+colnames(ilrs3) <- paste0("ilr", 1:3)
+head(ilrs3)
+nrow(ilrs3)
+nrow(all_data) # Number of rows for ilrs and all_data_comp matches
+
+# Get ilrs means
+ilr_mean_min <- colMeans(ilrs3)
+ilr_mean_min
+
+```
+
+# Descriptives of 24HAC behaviours (compositional means of whole population)
+```{r,include=TRUE}
+tbl1 <- CreateTableOne(data = all_data, vars = c('sex',
+                                                   'avg_sleep_min_wins_clos',
+                                                   'avg_sleep_pct_wins_clos',
+                                                   'avg_sedentary_min_wins_clos',
+                                                   'avg_sedentary_pct_wins_clos',
+                                                   'avg_light_pa_min_wins_clos',
+                                                   'avg_light_pa_pct_wins_clos',
+                                                   'avg_mvpa_min_wins_clos',
+                                                   'avg_mvpa_pct_wins_clos')) %>% 
+  print(., printToggle = FALSE)
+
+tbl1  
+  
+rownames(tbl1)[2:10] <- c('Sex = Male (%)',
+                          'Sleep (min/day), mean (SD)',
+                         'Sleep (%/day), mean (SD)',
+                         'Sedentary behaviour (min/day), mean (SD)',
+                         'Sedentary behaviour (%/day), mean (SD)',
+                         'Light PA (min/day), mean (SD)',
+                         'Light PA (%/day), mean (SD)',
+                         'Moderate-to-vigorous PA (min/day), mean (SD)',
+                         'Moderate-to-vigorous PA (%/day), mean (SD)')
+
+kable(tbl1, align = 'c', vline = '',
+      booktabs = TRUE,
+      caption = "Descriptive statistics of the sample",
+      linesep = '')
+
+```
+
+## Create new dataframe containing the data to be used in LPA
+```{r message=FALSE}
+
+ilr3_data <- cbind(all_data, ilrs3) %>% 
+  rename_all( ~ str_replace(., "avg_", "")) %>% 
+  rename("ilr_mvpa_others" = "ilr1",
+         "ilr_sb_lpa_sleep" = "ilr2",
+         "ilr_lpa_sleep" = "ilr3")
+            
+# Double-check there are no NAs in the data
+table(is.na(ilr3_data)) # No NAs
+skim(ilr3_data)
+
+# Save dataset
+#write.csv(ilr3_data, "spreadsheets/all_data_3ilrs_20240117.csv")
+
+```
+
+# Latent Profile Analysis with 3 ilrs
+## Checking normality and dealing with outliers
+```{r message=FALSE}
+
+## Histograms
+ilr3_data %>%
+  select(c("ilr_mvpa_others", "ilr_sb_lpa_sleep", "ilr_lpa_sleep")) %>%
+  pivot_longer(cols = 1:3, names_to = "measures", values_to = "data") %>%
+  ggplot(aes(data, fill = measures)) +
+  facet_wrap("measures", scale = "free") +
+  geom_histogram(colour = "black", binwidth = function(x) 2 * IQR(x) / (length(x)^(1/3))) + # Proportional bins
+  theme_minimal() +
+  theme(legend.position = "none")
+
+# Checking outliers 
+ilr1_outliers <- check_outliers(ilr3_data$ilr_mvpa_others, method = "iqr")
+ilr1_outliers # 4 outliers detected: cases 35, 197, 223, 239.
+
+ilr2_outliers <- check_outliers(ilr3_data$ilr_sb_lpa_sleep, method = "iqr")
+ilr2_outliers # No outliers detected.
+
+ilr3_outliers <- check_outliers(ilr3_data$ilr_lpa_sleep, method = "iqr")
+ilr3_outliers # 1 outlier detected: case 204.
+
+# Winsorizing outliers
+ilrs_wins <- ilr3_data
+
+for(var in c("ilr_mvpa_others", "ilr_sb_lpa_sleep", "ilr_lpa_sleep")){
+  Q <- quantile(ilrs_wins[[var]], probs=c(.05, .95), na.rm = TRUE)
+  Q1 <- quantile(ilrs_wins[[var]], probs=c(.25), na.rm = TRUE)
+  Q3 <- quantile(ilrs_wins[[var]], probs=c(.75), na.rm = TRUE)
+  iqr <- IQR(ilrs_wins[[var]], na.rm = TRUE)
+  up <-  Q3+1.5*iqr # Upper Range  
+  low <- Q1-1.5*iqr # Lower Range
+  new <- ilrs_wins %>% 
+    mutate(wins = ifelse(ilrs_wins[[var]] <= (Q1 - 1.5*iqr), Q[1], 
+                         ifelse(ilrs_wins[[var]] >= (Q3 + 1.5*iqr), Q[2], ilrs_wins[[var]]))) %>% 
+    select(wins) %>% 
+    rename_with(~paste0(var, "_",.))
+  ilrs_wins <- cbind(ilrs_wins, new)
+}
+
+## Checking distribution with winsorized data
+### Histograms
+ilrs_wins %>%
+  select("ilr_mvpa_others_wins", "ilr_sb_lpa_sleep_wins", "ilr_lpa_sleep_wins") %>%
+  pivot_longer(cols = 1:3, names_to = "measures", values_to = "data") %>%
+  ggplot(aes(data, fill = measures)) +
+  facet_wrap("measures", scale = "free") +
+  geom_histogram(colour = "black", binwidth = function(x) 2 * IQR(x) / (length(x)^(1/3))) + # Proportional bins
+  theme_minimal() +
+  theme(legend.position = "none") # All good now
+
+# Checking outliers 
+ilr1_outliers <- check_outliers(ilrs_wins$ilr_mvpa_others_wins, method = "iqr")
+ilr1_outliers # No outliers
+
+ilr2_outliers <- check_outliers(ilrs_wins$ilr_sb_lpa_sleep_wins, method = "iqr")
+ilr2_outliers # No outliers
+
+ilr3_outliers <- check_outliers(ilrs_wins$ilr_lpa_sleep_wins, method = "iqr")
+ilr3_outliers # No outliers
+
+
+skim(ilrs_wins)
+
+```
+
+## Exploring LPAs
+### Winsorized
+```{r }
+
+# Comparing solutions from 2 to 6 classes
+
+suppressMessages(mod <- estimate_profiles(df = ilrs_wins[,44:46],n_profiles = 2:6, models = 2))
+tbl_lpa <- sapply(mod,function(x) {x$fit}) %>% t(.)
+tbl_lpa[,3:17] <- round(tbl_lpa[,3:17],2)
+tbl_lpa_to_present <- tbl_lpa[,c(2,3,4,6,7,8,9,10,11,15,18,12)]
+rownames(tbl_lpa_to_present) <- c('2-class model','3-class model','4-class model','5-class model','6-class model')
+tbl_lpa_to_present
+
+```
+
+#### Checking the model (ilr) with 6 classes
+```{r }
+
+ilr_model2_6classes <- ilrs_wins %>% 
+  dplyr::select(ilr_mvpa_others_wins, 
+                ilr_sb_lpa_sleep_wins, 
+                ilr_lpa_sleep_wins) %>% 
+  estimate_profiles(6,
+                    variances = "varying",
+                    covariances = "zero")
+
+lpa_data_ilr_model2_6classes <- get_data(ilr_model2_6classes) %>%
+  rename_all(tolower) %>% 
+  mutate(across(class, as_factor))
+
+ids <- ilrs_wins %>% 
+  dplyr::select("id")
+
+lpa_data_ilr_model2_6classes <- bind_cols(ids, lpa_data_ilr_model2_6classes)
+
+
+# Participants N within each profile and plotting
+
+kable(print(printToggle = FALSE, CreateTableOne(data = lpa_data_ilr_model2_6classes, c("class")))) # One class <10
+
+plot_profiles(ilr_model2_6classes)
+
+```
+Note: Too few participants in class 2 and 5
+
+#### Checking the model (ilr) with 5 classes
+```{r }
+
+ilr_model2_5classes <- ilrs_wins %>% 
+  dplyr::select(ilr_mvpa_others_wins, 
+                ilr_sb_lpa_sleep_wins, 
+                ilr_lpa_sleep_wins) %>% 
+  estimate_profiles(5,
+                    variances = "varying",
+                    covariances = "zero")
+
+lpa_data_ilr_model2_5classes <- get_data(ilr_model2_5classes) %>%
+  rename_all(tolower) %>% 
+  mutate(across(class, as_factor))
+
+ids <- ilrs_wins %>% 
+  dplyr::select("id")
+
+lpa_data_ilr_model2_5classes <- bind_cols(ids, lpa_data_ilr_model2_5classes)
+
+
+# Participants N within each profile and plotting
+
+kable(print(printToggle = FALSE, CreateTableOne(data = lpa_data_ilr_model2_5classes, c("class"))))  
+
+# Distribution looks ok
+
+plot_profiles(ilr_model2_5classes)
+
+```
+
+#### Checking the model (ilr) with 4 classes
+```{r }
+
+ilr_model2_4classes <- ilrs_wins %>% 
+  dplyr::select(ilr_mvpa_others_wins, 
+                ilr_sb_lpa_sleep_wins, 
+                ilr_lpa_sleep_wins) %>% 
+  estimate_profiles(4,
+                    variances = "varying",
+                    covariances = "zero")
+
+lpa_data_ilr_model2_4classes <- get_data(ilr_model2_4classes) %>%
+  rename_all(tolower) %>% 
+  mutate(across(class, as_factor)) %>% 
+  bind_cols(ids) %>% 
+  relocate(id)
+
+# Participants N within each profile and plotting
+
+kable(print(printToggle = FALSE, CreateTableOne(data = lpa_data_ilr_model2_4classes, c("class")))) # Ptps are well divided between profiles
+
+plot_profiles(ilr_model2_4classes)
+
+```
+
+#### Checking the model (ilr) with 3 classes
+```{r }
+
+ilr_model2_3classes <- ilrs_wins %>% 
+  dplyr::select(ilr_mvpa_others_wins, 
+                ilr_sb_lpa_sleep_wins, 
+                ilr_lpa_sleep_wins) %>% 
+  estimate_profiles(3,
+                    variances = "varying",
+                    covariances = "zero")
+
+lpa_data_ilr_model2_3classes <- get_data(ilr_model2_3classes) %>%
+  rename_all(tolower) %>% 
+  mutate(across(class, as_factor)) %>% 
+  bind_cols(ids) %>% 
+  relocate(id)
+
+# Participants N within each profile and plotting
+
+kable(print(printToggle = FALSE, CreateTableOne(data = lpa_data_ilr_model2_3classes, c("class"))))
+
+# Distribution looks ok
+
+plot_profiles(ilr_model2_3classes)
+
+```
+
+#### Checking the model (ilr) with 2 classes
+```{r }
+
+ilr_model2_2classes <- ilrs_wins %>% 
+  dplyr::select(ilr_mvpa_others_wins, 
+                ilr_sb_lpa_sleep_wins, 
+                ilr_lpa_sleep_wins) %>% 
+  estimate_profiles(2,
+                    variances = "varying",
+                    covariances = "zero")
+
+lpa_data_ilr_model2_2classes <- get_data(ilr_model2_2classes) %>%
+  rename_all(tolower) %>% 
+  mutate(across(class, as_factor)) %>% 
+  bind_cols(ids) %>% 
+  relocate(id)
+
+# Participants N within each profile and plotting
+
+kable(print(printToggle = FALSE, CreateTableOne(data = lpa_data_ilr_model2_2classes, c("class"))))
+
+# Distribution looks ok
+
+plot_profiles(ilr_model2_2classes)
+
+```
+Note: Will retain model with 4 profiles because has >25 in all profiles and has the best fit model (tbl_lpa_to_present above).
+
+#### Final LPA model and plot
+```{r }
+
+lpa_final <- lpa_data_ilr_model2_4classes
+suppressMessages(lpa_final_fit <- estimate_profiles(df = lpa_data_ilr_model2_4classes[,4:6],n_profiles = 4, models = 2))
+skim(lpa_final)
+
+dat_to_plot <- reshape2::melt(lpa_data_ilr_model2_4classes[,c('class','ilr_mvpa_others_wins','ilr_sb_lpa_sleep_wins',
+                                                              'ilr_lpa_sleep_wins')],id.vars = 'class')
+levels(dat_to_plot$variable) <- c('ilr 1\nMVPA: SB+LPA+Sleep', 'ilr 2\nSB: LPA+Sleep', 'ilr 3\nLPA: Sleep')
+
+ggplot(data = dat_to_plot, aes(x = variable, y = value, fill = class)) +
+  geom_boxplot() +
+  scale_y_continuous(breaks = seq(-5,5,by = 0.2)) +
+  labs(x = ' ', y = 'Isometric log-ratio') + 
+  theme_light() +
+  theme(legend.title = element_blank())
+
+
+
+```
+
+#### Descriptives of ilrs
+```{r,include=TRUE}
+tbl_comp_mean <- CreateTableOne(data = lpa_data_ilr_model2_4classes,vars = c('ilr_mvpa_others_wins','ilr_sb_lpa_sleep_wins',
+                                                                             'ilr_lpa_sleep_wins')) %>% 
+  print(., printToggle = FALSE)
+
+rownames(tbl_comp_mean)[2:4] <- c('ilr 1 (MVPA: SB+LPA+Sleep), mean (SD)',
+                                  'ilr 2 (SB: LPA+Sleep), mean (SD)',
+                                  'ilr 3 (LPA: Sleep), mean (SD)')
+
+kable(tbl_comp_mean, align = 'c', vline = '',
+      booktabs = TRUE,
+      caption = "Descriptive statistics of ilr compositions",
+      linesep = '')
+```
+
+
+### Raw
+```{r }
+
+# Comparing solutions from 2 to 6 classes
+
+suppressMessages(mod <- estimate_profiles(df = ilrs_wins[,41:43],n_profiles = 2:6, models = 2))
+tbl_lpa <- sapply(mod,function(x) {x$fit}) %>% t(.)
+tbl_lpa[,3:17] <- round(tbl_lpa[,3:17],2)
+tbl_lpa_to_present <- tbl_lpa[,c(2,3,4,6,7,8,9,10,11,15,18,12)]
+rownames(tbl_lpa_to_present) <- c('2-class model','3-class model','4-class model','5-class model','6-class model')
+tbl_lpa_to_present
+
+```
+
+#### Checking the model (ilr) with 6 classes
+```{r }
+
+ilr_model2_6classes <- ilrs_wins %>% 
+  dplyr::select(ilr_mvpa_others, 
+                ilr_sb_lpa_sleep, 
+                ilr_lpa_sleep) %>% 
+  estimate_profiles(6,
+                    variances = "varying",
+                    covariances = "zero")
+
+lpa_data_ilr_model2_6classes <- get_data(ilr_model2_6classes) %>%
+  rename_all(tolower) %>% 
+  mutate(across(class, as_factor))
+
+ids <- ilrs_wins %>% 
+  dplyr::select("id")
+
+lpa_data_ilr_model2_6classes <- bind_cols(ids, lpa_data_ilr_model2_6classes)
+
+
+# Participants N within each profile and plotting
+
+kable(print(printToggle = FALSE, CreateTableOne(data = lpa_data_ilr_model2_6classes, c("class")))) # One class <10
+
+plot_profiles(ilr_model2_6classes)
+
+```
+Note: Too few participants in class 3
+
+#### Checking the model (ilr) with 5 classes
+```{r }
+
+ilr_model2_5classes <- ilrs_wins %>% 
+  dplyr::select(ilr_mvpa_others, 
+                ilr_sb_lpa_sleep, 
+                ilr_lpa_sleep) %>% 
+  estimate_profiles(5,
+                    variances = "varying",
+                    covariances = "zero")
+
+lpa_data_ilr_model2_5classes <- get_data(ilr_model2_5classes) %>%
+  rename_all(tolower) %>% 
+  mutate(across(class, as_factor))
+
+ids <- ilrs_wins %>% 
+  dplyr::select("id")
+
+lpa_data_ilr_model2_5classes <- bind_cols(ids, lpa_data_ilr_model2_5classes)
+
+
+# Participants N within each profile and plotting
+
+kable(print(printToggle = FALSE, CreateTableOne(data = lpa_data_ilr_model2_5classes, c("class"))))  
+
+# Distribution looks ok
+
+plot_profiles(ilr_model2_5classes)
+
+```
+
+#### Checking the model (ilr) with 4 classes
+```{r }
+
+ilr_model2_4classes <- ilrs_wins %>% 
+  dplyr::select(ilr_mvpa_others, 
+                ilr_sb_lpa_sleep, 
+                ilr_lpa_sleep) %>% 
+  estimate_profiles(4,
+                    variances = "varying",
+                    covariances = "zero")
+
+lpa_data_ilr_model2_4classes <- get_data(ilr_model2_4classes) %>%
+  rename_all(tolower) %>% 
+  mutate(across(class, as_factor)) %>% 
+  bind_cols(ids) %>% 
+  relocate(id)
+
+# Participants N within each profile and plotting
+
+kable(print(printToggle = FALSE, CreateTableOne(data = lpa_data_ilr_model2_4classes, c("class")))) # Ptps are well divided between profiles
+
+plot_profiles(ilr_model2_4classes)
+
+```
+
+#### Checking the model (ilr) with 3 classes
+```{r }
+
+ilr_model2_3classes <- ilrs_wins %>% 
+  dplyr::select(ilr_mvpa_others, 
+                ilr_sb_lpa_sleep, 
+                ilr_lpa_sleep) %>% 
+  estimate_profiles(3,
+                    variances = "varying",
+                    covariances = "zero")
+
+lpa_data_ilr_model2_3classes <- get_data(ilr_model2_3classes) %>%
+  rename_all(tolower) %>% 
+  mutate(across(class, as_factor)) %>% 
+  bind_cols(ids) %>% 
+  relocate(id)
+
+# Participants N within each profile and plotting
+
+kable(print(printToggle = FALSE, CreateTableOne(data = lpa_data_ilr_model2_3classes, c("class"))))
+
+# Distribution looks ok
+
+plot_profiles(ilr_model2_3classes)
+
+```
+
+#### Checking the model (ilr) with 2 classes
+```{r }
+
+ilr_model2_2classes <- ilrs_wins %>% 
+  dplyr::select(ilr_mvpa_others, 
+                ilr_sb_lpa_sleep, 
+                ilr_lpa_sleep) %>% 
+  estimate_profiles(2,
+                    variances = "varying",
+                    covariances = "zero")
+
+lpa_data_ilr_model2_2classes <- get_data(ilr_model2_2classes) %>%
+  rename_all(tolower) %>% 
+  mutate(across(class, as_factor)) %>% 
+  bind_cols(ids) %>% 
+  relocate(id)
+
+# Participants N within each profile and plotting
+
+kable(print(printToggle = FALSE, CreateTableOne(data = lpa_data_ilr_model2_2classes, c("class"))))
+
+# Distribution looks ok
+
+plot_profiles(ilr_model2_2classes)
+
+```
+Note: Will retain model with 4 profiles because has >25 in all profiles and has the best fit model (tbl_lpa_to_present above).
+
+#### Final LPA model and plot
+```{r }
+
+lpa_final <- lpa_data_ilr_model2_4classes
+suppressMessages(lpa_final_fit <- estimate_profiles(df = lpa_data_ilr_model2_4classes[,4:6],n_profiles = 4, models = 2))
+skim(lpa_final)
+
+dat_to_plot <- reshape2::melt(lpa_data_ilr_model2_4classes[,c('class','ilr_mvpa_others', 'ilr_sb_lpa_sleep', 'ilr_lpa_sleep')],id.vars = 'class')
+levels(dat_to_plot$variable) <- c('ilr 1\nMVPA: SB+LPA+Sleep', 'ilr 2\nSB: LPA+Sleep', 'ilr 3\nLPA: Sleep')
+
+ggplot(data = dat_to_plot, aes(x = variable, y = value, fill = class)) +
+  geom_boxplot() +
+  scale_y_continuous(breaks = seq(-5,5,by = 0.2)) +
+  labs(x = ' ', y = 'Isometric log-ratio') + 
+  theme_light() +
+  theme(legend.title = element_blank())
+
+
+
+```
+
+#### Descriptives of ilrs
+```{r,include=TRUE}
+tbl_comp_mean <- CreateTableOne(data = lpa_data_ilr_model2_4classes, vars = c('ilr_mvpa_others', 'ilr_sb_lpa_sleep', 'ilr_lpa_sleep')) %>% 
+  print(., printToggle = FALSE)
+
+rownames(tbl_comp_mean)[2:4] <- c('ilr 1 (MVPA: SB+LPA+Sleep), mean (SD)',
+                                  'ilr 2 (SB: LPA+Sleep), mean (SD)',
+                                  'ilr 3 (LPA: Sleep), mean (SD)')
+
+kable(tbl_comp_mean, align = 'c', vline = '',
+      booktabs = TRUE,
+      caption = "Descriptive statistics of ilr compositions",
+      linesep = '')
+```
+
+
+# Summary stats by Profile and Histograms
+## Winsorized
+### Pairwise descriptive difference by class
+```{r }
+
+kable(print(printToggle = FALSE, CreateTableOne(data = final_data_lpa, 
+                                                c("age","sex","bmi","moca", "mmse","day_duration_wins",
+                                                  "sleep_min_wins_clos", 
+                                                  "sedentary_min_wins_clos", 
+                                                  "light_pa_min_wins_clos",
+                                                  "mvpa_min_wins_clos",
+                                                  "sleep_pct_wins_clos", 
+                                                  "sedentary_pct_wins_clos", 
+                                                  "light_pa_pct_wins_clos",
+                                                  "mvpa_pct_wins_clos",
+                                                  "adas_cog_plus_wins"), strata = "class", 
+                                                  includeNA = TRUE, addOverall = TRUE)))
+
+# Two proportionns z-test for sex
+## Profile Avg vs. Active Chillers
+sex_avg_ac <- final_data_lpa %>% 
+  filter(class == "Average 24-HAC" | class == "Active Chillers") %>% 
+  dplyr::select(4,47) # Selecting sex and class
+
+table(sex_avg_ac$sex, sex_avg_ac$class)
+
+zprop_sex_ac_sav <- prop.test(x = c(75, 36), n = c(108, 64)) # prop.test(x = c(f, f), n = c(n, n))
+zprop_sex_ac_sav # NS
+
+## Profile Avg x PA masters
+sex_avg_pam <- final_data_lpa %>% 
+  filter(class == "Average 24HAC" | class == "Physical activity masters") %>% 
+  dplyr::select(4,47) # Selecting sex and class
+
+table(sex_avg_pam$sex, sex_avg_pam$class)
+
+zprop_sex_ac_pam <- prop.test(x = c(75, 42), n = c(108, 56)) # prop.test(x = c(f, f), n = c(n, n))
+zprop_sex_ac_pam # NS
+
+## Profile Avg x SS
+sex_avg_ss <- final_data_lpa %>% 
+  filter(class == "Average 24HAC" | class == "Sedentary savants") %>% 
+  dplyr::select(4,47) # Selecting sex and class
+
+table(sex_avg_ss$sex, sex_avg_ss$class)
+
+sex_avg_ss <- prop.test(x = c(75, 7), n = c(108, 25))
+sex_avg_ss # Sig p = 0.0003036
+
+## Profile Active Chillers x PA masters
+sex_ac_pam <- final_data_lpa %>% 
+  filter(class == "Active Chillers" | class == "Physical activity masters") %>% 
+  dplyr::select(4,47) # Selecting sex and class
+
+table(sex_ac_pam$sex, sex_ac_pam$class)
+
+zprop_sex_ac_pam <- prop.test(x = c(33, 42), n = c(64, 56))
+zprop_sex_ac_pam # NS
+
+## Profile Active Chillers x SS
+sex_ac_ss <- final_data_lpa %>% 
+  filter(class == "Active Chillers" | class == "Sedentary savants") %>% 
+  dplyr::select(4,47) # Selecting sex and class
+
+table(sex_ac_ss$sex, sex_ac_ss$class)
+
+zprop_sex_ac_ss <- prop.test(x = c(39, 7), n = c(70, 26))
+zprop_sex_ac_ss # Sig 0.01402
+
+## Profile PA masters x SS
+sex_pam_ss <- final_data_lpa %>% 
+  filter(class == "Physical activity masters" | class == "Sedentary savants") %>% 
+  dplyr::select(4,47) # Selecting sex and class
+
+table(sex_pam_ss$sex, sex_pam_ss$class)
+
+zprop_sex_pam_ss <- prop.test(x = c(42, 7), n = c(56, 25))
+zprop_sex_pam_ss # Sig 0.0001762
+
+kable(print(printToggle = FALSE, CreateTableOne(data = final_data_lpa, 
+                                                c("age","sex","bmi","moca","mmse","day_duration_wins","education",
+                                                  "sleep_min_wins_clos",
+                                                  "sleep_pct_wins_clos", 
+                                                  "sedentary_min_wins_clos",
+                                                  "sedentary_pct_wins_clos", 
+                                                  "light_pa_min_wins_clos",
+                                                  "light_pa_pct_wins_clos",
+                                                  "mvpa_min_wins_clos",
+                                                  "mvpa_pct_wins_clos",
+                                                  "adas_cog_plus_wins"), strata = "rct", 
+                                                  includeNA = TRUE, addOverall = TRUE)))
+
+```
+
+### Pairwise continuous descriptive differences between profiles
+```{r, message=FALSE}
+
+## Select variable names for models
+demo_pairw_outcomes <- c("age",
+                         "bmi",
+                         "day_duration_wins",
+                         "sleep_pct_wins_clos", 
+                         "sedentary_pct_wins_clos", 
+                         "light_pa_pct_wins_clos",
+                         "mvpa_pct_wins_clos")
+
+# List to store models
+anovas_pairw_outcomes = list()
+
+# Run models in loop script
+for (var in demo_pairw_outcomes){
+  # Formula
+  form <- paste(
+    var, "~", "class")
+  anovas_pairw_outcomes[var] <- list(lm(form,
+                                      data = final_data_lpa))
+}
+
+## Printing models and assumptions
+
+for (model in anovas_pairw_outcomes){
+  message("####################################################################################")
+  message()
+  print(formula(model), showEnv = FALSE)
+  print(Anova(model, type = "III"))
+  message()
+  print("Post-hoc")
+  print(emmeans(model, ~class))
+  print(pairs(emmeans(model, ~ class)))
+}
+
+final_data_lpa <- final_data_lpa %>%
+  mutate(across(where(is.character), ~iconv(., "UTF-8", "ASCII//TRANSLIT")))
+
+```
+
+## Raw
+### Pairwise descriptive difference by class
+```{r }
+
+kable(print(printToggle = FALSE, CreateTableOne(data = final_data_lpa, 
+                                                c("age","sex","bmi","moca", "mmse","day_duration",
+                                                  "sleep_min_clos", 
+                                                  "sedentary_min_clos", 
+                                                  "light_pa_min_clos",
+                                                  "mvpa_min_clos",
+                                                  "sleep_pct_clos", 
+                                                  "sedentary_pct_clos", 
+                                                  "light_pa_pct_clos",
+                                                  "mvpa_pct_clos",
+                                                  "adas_cog_plus"), strata = "class", 
+                                                  includeNA = TRUE, addOverall = TRUE)))
+
+# Two proportionns z-test for sex
+## Profile Avg vs. Active Chillers
+sex_avg_ac <- final_data_lpa %>% 
+  filter(class == "Average 24-HAC" | class == "Active Chillers") %>% 
+  dplyr::select(4,47) # Selecting sex and class
+
+table(sex_avg_ac$sex, sex_avg_ac$class)
+
+zprop_sex_ac_sav <- prop.test(x = c(75, 36), n = c(108, 64)) # prop.test(x = c(f, f), n = c(n, n))
+zprop_sex_ac_sav # NS
+
+## Profile Avg x PA masters
+sex_avg_pam <- final_data_lpa %>% 
+  filter(class == "Average 24HAC" | class == "Physical activity masters") %>% 
+  dplyr::select(4,47) # Selecting sex and class
+
+table(sex_avg_pam$sex, sex_avg_pam$class)
+
+zprop_sex_ac_pam <- prop.test(x = c(75, 42), n = c(108, 56)) # prop.test(x = c(f, f), n = c(n, n))
+zprop_sex_ac_pam # NS
+
+## Profile Avg x SS
+sex_avg_ss <- final_data_lpa %>% 
+  filter(class == "Average 24HAC" | class == "Sedentary savants") %>% 
+  dplyr::select(4,47) # Selecting sex and class
+
+table(sex_avg_ss$sex, sex_avg_ss$class)
+
+sex_avg_ss <- prop.test(x = c(75, 7), n = c(108, 25))
+sex_avg_ss # Sig p = 0.0003036
+
+## Profile Active Chillers x PA masters
+sex_ac_pam <- final_data_lpa %>% 
+  filter(class == "Active Chillers" | class == "Physical activity masters") %>% 
+  dplyr::select(4,47) # Selecting sex and class
+
+table(sex_ac_pam$sex, sex_ac_pam$class)
+
+zprop_sex_ac_pam <- prop.test(x = c(33, 42), n = c(64, 56))
+zprop_sex_ac_pam # NS
+
+## Profile Active Chillers x SS
+sex_ac_ss <- final_data_lpa %>% 
+  filter(class == "Active Chillers" | class == "Sedentary savants") %>% 
+  dplyr::select(4,47) # Selecting sex and class
+
+table(sex_ac_ss$sex, sex_ac_ss$class)
+
+zprop_sex_ac_ss <- prop.test(x = c(39, 7), n = c(70, 26))
+zprop_sex_ac_ss # Sig 0.01402
+
+## Profile PA masters x SS
+sex_pam_ss <- final_data_lpa %>% 
+  filter(class == "Physical activity masters" | class == "Sedentary savants") %>% 
+  dplyr::select(4,47) # Selecting sex and class
+
+table(sex_pam_ss$sex, sex_pam_ss$class)
+
+zprop_sex_pam_ss <- prop.test(x = c(42, 7), n = c(56, 25))
+zprop_sex_pam_ss # Sig 0.0001762
+
+kable(print(printToggle = FALSE, CreateTableOne(data = final_data_lpa, 
+                                                c("age","sex","bmi","moca", "mmse","day_duration",
+                                                  "sleep_min_clos", 
+                                                  "sedentary_min_clos", 
+                                                  "light_pa_min_clos",
+                                                  "mvpa_min_clos",
+                                                  "sleep_pct_clos", 
+                                                  "sedentary_pct_clos", 
+                                                  "light_pa_pct_clos",
+                                                  "mvpa_pct_clos",
+                                                  "adas_cog_plus"), strata = "rct", 
+                                                  includeNA = TRUE, addOverall = TRUE)))
+
+```
+
+### Pairwise continuous descriptive differences between profiles
+```{r, message=FALSE}
+
+## Select variable names for models
+demo_pairw_outcomes <- c("age",
+                         "bmi",
+                         "moca",
+                         "mmse",
+                         "day_duration",
+                         "sleep_pct_clos", 
+                         "sedentary_pct_clos", 
+                         "light_pa_pct_clos",
+                         "mvpa_pct_clos")
+
+# List to store models
+anovas_pairw_outcomes = list()
+
+# Run models in loop script
+for (var in demo_pairw_outcomes){
+  # Formula
+  form <- paste(
+    var, "~", "class")
+  anovas_pairw_outcomes[var] <- list(lm(form,
+                                      data = final_data_lpa))
+}
+
+## Printing models and assumptions
+
+for (model in anovas_pairw_outcomes){
+  message("####################################################################################")
+  message()
+  print(formula(model), showEnv = FALSE)
+  print(Anova(model, type = "III"))
+  message()
+  print("Post-hoc")
+  print(emmeans(model, ~class))
+  print(pairs(emmeans(model, ~ class)))
+}
+
+final_data_lpa <- final_data_lpa %>%
+  mutate(across(where(is.character), ~iconv(., "UTF-8", "ASCII//TRANSLIT")))
+
+```
+
+# ANCOVA on ADAS-Cog
+## Winsorized
+```{r}
+
+adas_cog_lm <- lm(adas_cog_plus_wins~class + sex + age + bmi + moca + rct, final_data_lpa)
+Anova(adas_cog_lm, type = "III")
+summary(adas_cog_lm)
+performance(adas_cog_lm)
+emmeans(adas_cog_lm, ~ class)
+pairs(emmeans(adas_cog_lm, ~ class, adjust = "tukey"))
+
+# Assumptions
+## Function to summarize assumptions
+assumptions <- function(x) {
+  my_list <- list()
+  model.metrics <- augment(x) %>% dplyr::select(-.hat, -.sigma, -.fitted)
+  my_list$observations <- model.metrics %>% count(class)
+  my_list$shapiro <- model.metrics %>% shapiro_test(.resid)
+  my_list$levene <- levene_test(.resid ~ class, data = model.metrics)
+  my_list$outliers <- model.metrics %>% filter(abs(.std.resid) > 3)
+  return(my_list)
+}
+
+# Run the assumptions function on the model
+assumptions_list <- assumptions(adas_cog_lm)
+assumptions_list
+```
+Note: NS.
+
+### Education as covariate instead of MoCA
+```{r}
+
+adas_cog_lm_ed <- lm(adas_cog_plus_wins~class + sex + age + bmi + education + rct, final_data_lpa)
+Anova(adas_cog_lm_ed, type = "III")
+summary(adas_cog_lm_ed)
+performance(adas_cog_lm_ed)
+emmeans(adas_cog_lm_ed, ~ class)
+pairs(emmeans(adas_cog_lm_ed, ~ class, adjust = "tukey"))
+
+# Assumptions
+## Function to summarize assumptions
+assumptions <- function(x) {
+  my_list <- list()
+  model.metrics <- augment(x) %>% dplyr::select(-.hat, -.sigma, -.fitted)
+  my_list$observations <- model.metrics %>% count(class)
+  my_list$shapiro <- model.metrics %>% shapiro_test(.resid)
+  my_list$levene <- levene_test(.resid ~ class, data = model.metrics)
+  my_list$outliers <- model.metrics %>% filter(abs(.std.resid) > 3)
+  return(my_list)
+}
+
+# Run the assumptions function on the model
+assumptions_list <- assumptions(adas_cog_lm_ed)
+assumptions_list
+```
+Note: NS.
+
+## Raw
+```{r}
+
+adas_cog_lm <- lm(adas_cog_plus~class + sex + age + bmi + moca + rct, final_data_lpa)
+Anova(adas_cog_lm, type = "III")
+summary(adas_cog_lm)
+performance(adas_cog_lm)
+emmeans(adas_cog_lm, ~ class)
+pairs(emmeans(adas_cog_lm, ~ class, adjust = "tukey"))
+
+# Assumptions
+## Function to summarize assumptions
+assumptions <- function(x) {
+  my_list <- list()
+  model.metrics <- augment(x) %>% dplyr::select(-.hat, -.sigma, -.fitted)
+  my_list$observations <- model.metrics %>% count(class)
+  my_list$shapiro <- model.metrics %>% shapiro_test(.resid)
+  my_list$levene <- levene_test(.resid ~ class, data = model.metrics)
+  my_list$outliers <- model.metrics %>% filter(abs(.std.resid) > 3)
+  return(my_list)
+}
+
+# Run the assumptions function on the model
+assumptions_list <- assumptions(adas_cog_lm)
+assumptions_list
+```
